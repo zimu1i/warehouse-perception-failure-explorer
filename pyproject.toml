@@ -1,0 +1,28 @@
+[project]
+name = "wpfe"
+version = "0.1.0"
+description = "Warehouse Perception Failure Explorer: label-blind review prioritization on LOCO"
+requires-python = ">=3.11,<3.13"
+dependencies = [
+    "duckdb>=1.1",
+    "pandas>=2.2",
+    "pyarrow>=17",
+    "pillow>=10.4",
+    "pyyaml>=6.0",
+]
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[project.scripts]
+wpfe = "wpfe.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/wpfe"]

@@ -1,0 +1,20 @@
+# All paths are relative to the repository root.
+dataset:
+  release: loco-v1
+  raw_root: data/raw/loco_v1
+  annotation_file: loco-all-v1.json
+
+split:
+  # Decision D3: environment-level split on LOCO subsets.
+  dev_subsets: [2, 3, 5]
+  review_subsets: [1, 4]
+
+classes:
+  # COCO category id -> canonical class name. Ingestion fails on unknown ids.
+  7: pallet
+  3: small_load_carrier
+  10: stillage
+  11: pallet_truck
+  5: forklift
+
+artifacts_dir: data/artifacts
