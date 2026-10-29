@@ -36,3 +36,38 @@ Each entry: date, decision, alternatives, rationale, costs, status.
 - **Rationale:** the tolerance adapts to each image's own scale instead of one fixed pixel value; LOCO mixes five resolutions from 640x480 to 1920x1080.
 - **Costs accepted:** three thresholds to justify and test; the > 10% escalation partly overlaps the image-level `size_mismatch` check. On LOCO v1 no box overshoots by more than 0.5 px, so these rules guard against future data or code bugs rather than changing current results.
 - **Status:** final; validation flags only and never clips. Any clipping for evaluation is decided and documented in the evaluation step.
+
+## D5. Detector setup: fine-tune on dev environments (2026-10-28)
+
+- **Options considered:** A zero-shot OWLv2 with the best prompt per class; B fine-tune a closed-vocabulary detector on dev subsets only; C zero-shot, scored on stillages, forklifts and pallet trucks only.
+- **Decision (B):** fine-tune a COCO-pretrained detector on part of the dev split, choose the operating threshold and tau on a held-out dev subset, and freeze the model before any review-pool inference.
+- **Evidence:** zero-shot benchmark (`docs/detector_benchmark.md`): pallet AP50 below 0.05 for both models; with OWLv2 at score >= 0.1, about 90% of dev images have recall below 0.5, so the failure event would be saturated and leave no headroom for ranking.
+- **Rationale:** a detector trained on some sites and deployed to new ones is the realistic setting for review prioritization. Its failures on unseen environments are informative rather than dominated by one systematic labeling-granularity mismatch, which a flip-instability signal cannot see.
+- **Costs accepted:** roughly half a day of schedule; training on MPS; a training dependency and its license; the dev split now serves both training and calibration, so they must use different subsets.
+- **Unchanged:** the model is frozen before selection, the review pool stays unseen, and the project makes no retraining or active-learning claim. Zero-shot results stay in the report as the reason for training.
+- **Status:** chosen; training library and calibration subset pending (D6).
+
+## D6. Training setup and dev re-split (2026-10-28)
+
+- **Options considered:** tuning subset W3, W5 or W2 (the other two train); torchvision Faster R-CNN ResNet50-FPN v2 or MobileNetV3-FPN.
+- **Decision:** train on subsets 2 and 5 (1,947 annotated images); choose the operating threshold and tau on subset 3 (873 images). Model: torchvision `fasterrcnn_resnet50_fpn_v2`, COCO_V1 weights (BSD-3), new 5-class head, shorter side 640 px, 6 epochs, SGD lr 0.005, fixed schedule.
+- **Rationale:** subset 3 contains every class (402 stillages); subset 5 has only 1 stillage and could not check that class. ResNet50-FPN handles small, dense objects better than MobileNet.
+- **Measured cost:** on the M3, 1.55 s per batch of 2 at 640 px (about 25 min per epoch, 5.8 GB); 800 px was 1.5x slower. No MPS operations fell back to CPU.
+- **Guards:** `check_training_split` rejects overlapping train/tune subsets or any review subset (tested). The last epoch is used downstream; the tune subset is never used to pick an epoch.
+- **Status:** final. Flip augmentation pending (D7).
+
+## D7. Flip augmentation during training (2026-10-28)
+
+- **Options considered:** horizontal flip with p = 0.5; no flip augmentation.
+- **Decision:** p = 0.5, applied to image and boxes together at load time (raw data untouched).
+- **Rationale:** standard practice and a better detector. It is also the harder test for flip instability: the model sees mirrored scenes during training, so remaining instability on test images is less likely to reflect unfamiliarity with mirrored views. Training without flips could inflate the signal and would look like tuning the setup in the method's favor.
+- **Cost accepted:** the flip-instability signal may be weaker than with an unaugmented model.
+- **Status:** final.
+
+## D8. Matching rules for the failure event (2026-10-28)
+
+- **Options considered (IoU threshold):** 0.5, 0.3, 0.75.
+- **Decision:** class-aware, greedy one-to-one matching by descending score (the pycocotools rule); a GT box counts as found if matched at IoU >= 0.5.
+- **Rationale:** 0.5 is the standard threshold (PASCAL VOC, COCO AP50) and easy to compare. One-to-one matching stops one large box over a stack from counting as several found pallets, which is the dominant zero-shot failure.
+- **Costs accepted:** 31% of dev pallets are under 32x32 px, where a few pixels of offset fall below 0.5 IoU; object size is reported as a slice and results are re-run at IoU 0.3 as a sensitivity check. Greedy matching is not globally optimal (tested), but it matches the standard evaluator.
+- **Status:** final.

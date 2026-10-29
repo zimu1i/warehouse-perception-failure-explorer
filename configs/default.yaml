@@ -18,3 +18,52 @@ classes:
   5: forklift
 
 artifacts_dir: data/artifacts
+
+detector:
+  # Predictions are stored down to this score so operating thresholds can be
+  # chosen later on dev data without re-running inference.
+  score_floor: 0.05
+  models:
+    grounding_dino_tiny:
+      hf_id: IDEA-Research/grounding-dino-tiny
+      revision: a2bb814dd30d776dcf7e30523b00659f4f141c71
+    owlv2_base:
+      hf_id: google/owlv2-base-patch16-ensemble
+      revision: cfd3195ba4ea9592eec887ded089f4c08eff231d
+  # Canonical class -> text phrases. Every phrase maps back to exactly one class.
+  prompt_sets:
+    literal:
+      pallet: [pallet]
+      forklift: [forklift]
+      pallet_truck: [pallet truck]
+      small_load_carrier: [small load carrier]
+      stillage: [stillage]
+    descriptive:
+      pallet: [wooden pallet]
+      forklift: [forklift]
+      pallet_truck: [hand pallet jack]
+      small_load_carrier: [plastic storage crate]
+      stillage: [metal wire mesh cage container]
+
+benchmark:
+  n_images: 50
+  seed: 0
+
+training:
+  # Decision D6: train on dev subsets 2+5, tune thresholds and tau on subset 3.
+  # Neither may touch the review subsets.
+  train_subsets: [2, 5]
+  tune_subsets: [3]
+  arch: fasterrcnn_resnet50_fpn_v2  # torchvision, COCO_V1 weights, BSD-3
+  min_size: 640  # shorter image side after resize; 800 measured 1.5x slower on MPS
+  max_size: 1066
+  epochs: 6
+  batch_size: 2
+  lr: 0.005
+  momentum: 0.9
+  weight_decay: 0.0001
+  warmup_iters: 300
+  lr_drop_epochs: [5]  # lr x0.1 from this epoch (1-based)
+  hflip_prob: 0.5  # decision D7: standard augmentation; harder, more honest test of flip instability
+  monitor_images: 150  # fixed tune-subset sample scored after each epoch
+  seed: 0

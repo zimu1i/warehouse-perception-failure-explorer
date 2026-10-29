@@ -44,6 +44,14 @@ class Config:
     def review_subsets(self) -> list[int]:
         return list(self.raw["split"]["review_subsets"])
 
+    @property
+    def train_subsets(self) -> list[int]:
+        return list(self.raw["training"]["train_subsets"])
+
+    @property
+    def tune_subsets(self) -> list[int]:
+        return list(self.raw["training"]["tune_subsets"])
+
     def hash(self) -> str:
         """Stable hash of the config content, recorded with every artifact."""
         text = yaml.safe_dump(self.raw, sort_keys=True)
