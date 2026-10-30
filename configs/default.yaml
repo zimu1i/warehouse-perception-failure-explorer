@@ -67,3 +67,24 @@ training:
   hflip_prob: 0.5  # decision D7: standard augmentation; harder, more honest test of flip instability
   monitor_images: 150  # fixed tune-subset sample scored after each epoch
   seed: 0
+
+# The trained detector every later step uses (decision D6/D7 run). Pinned by
+# name because run ids include the config hash, which later sections change.
+frozen_model: frcnn_9c47bb699ddc
+
+failure_event:
+  # Decisions D1, D8, D10: frozen on the tune subset (W3) on 2026-10-29,
+  # before any review-pool label was read. Do not change after seeing review results.
+  iou_threshold: 0.5
+  score_threshold: 0.4  # max F1 on W3 (0.44; ties 0.5, lower one kept to favor recall)
+  tau: 0.4  # severe failure: image recall < tau; 43% of W3 images
+
+experiment:
+  # Decision D11: frozen and committed before any review-pool label was read.
+  # Run once; do not change after seeing results.
+  pool: review_annotated  # 2,277 images in review_subsets with annotations (D2)
+  budgets: [25, 50, 100]
+  random_seeds: 1000
+  selectors: [random, instability, instability_diverse]
+  diversity_gap_frames: 2  # skip picks within +-2 frames of an earlier pick, same camera sequence
+  report_by: [all, subset]

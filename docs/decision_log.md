@@ -71,3 +71,31 @@ Each entry: date, decision, alternatives, rationale, costs, status.
 - **Rationale:** 0.5 is the standard threshold (PASCAL VOC, COCO AP50) and easy to compare. One-to-one matching stops one large box over a stack from counting as several found pallets, which is the dominant zero-shot failure.
 - **Costs accepted:** 31% of dev pallets are under 32x32 px, where a few pixels of offset fall below 0.5 IoU; object size is reported as a slice and results are re-run at IoU 0.3 as a sensitivity check. Greedy matching is not globally optimal (tested), but it matches the standard evaluator.
 - **Status:** final.
+
+## D9. Flip-instability score (2026-10-28)
+
+- **Options considered:** A count of unpaired boxes; B fraction of unpaired boxes; C score-weighted fraction of unpaired boxes.
+- **Decision (C):** match original-view boxes to flipped-view boxes (mapped back) with the D8 rule; instability = score mass of unpaired boxes in both views / total score mass in both views. Images with no boxes in either view score 0.
+- **Rationale:** normalized like the D1 recall event, so dense scenes are not favored; a confident box that disappears under mirroring counts far more than flicker near the 0.05 score floor; needs no extra threshold.
+- **Costs accepted:** an image where the detector finds nothing in either view looks perfectly stable, so consistent misses are invisible to this signal and are reported separately. Matching runs with original-view boxes as the reference and flipped-view scores setting the order, which is not perfectly symmetric.
+- **Status:** final.
+
+## D10. Frozen operating point and tau (2026-10-29)
+
+- **Measured on W3 only (873 annotated images, original view):** F1 is flat at 0.43-0.44 for score thresholds 0.3-0.5. At threshold 0.4: precision 0.47, recall 0.42, median image recall 0.43. Severe-failure share at tau 0.3 / 0.4 / 0.5: 23% / 43% / 64%.
+- **Options considered (tau, at threshold 0.4):** 0.4 (43%); 0.3 (23%); also tau 0.5 at threshold 0.2 (46%).
+- **Decision:** score threshold 0.4 (maximum F1 on W3; the lower of the tied values, to favor recall); tau 0.4. An image is a severe failure if fewer than 40% of its GT boxes are matched at IoU 0.5 by predictions with score >= 0.4.
+- **Rationale:** the threshold is set by a rule rather than by eye. tau 0.4 sits inside the 20-50% target band with room to fall if the review sites are easier (their median instability is lower than W3's), and keeps enough positive images for stable comparisons.
+- **Costs accepted:** with a 43% base rate, a perfect selector can beat random by at most about 2.3x. Review-pool base rate is unknown until the experiment runs and may differ from W3.
+- **Status:** frozen in `configs/default.yaml` (`failure_event`) before reading any review-pool labels.
+
+## D11. Selection experiment design (2026-10-29)
+
+- **Pool:** 2,277 annotated review images (subset 1: 1,075; subset 4: 1,202). Unannotated images are excluded (D2).
+- **Budgets:** 25, 50, 100 images.
+- **Selectors (label-blind; read predictions and file paths only):** random (1,000 seeds); top-k by flip instability (D9); instability with diversity, which walks the instability ranking and skips any image within +-2 frames (filename order) of an earlier pick in the same camera sequence.
+- **Evidence for the diversity rule (label-blind check):** in the plain top 100, 42 picks are within 2 frames of another pick, and 73 come from subset 1 (47% of the pool). Filename order is used because the timestamps mix decimal separators, units and device clocks.
+- **Outcome measures:** severe failures found (D10 rule), lift over the random mean, and p = share of random batches with at least as many failures. Reported for the whole pool and per subset.
+- **Uncertainty:** the pool has only 8 camera sequences and neighboring frames are correlated, so consistency across the two review sites is the main robustness evidence; no sequence-level bootstrap is attempted with 8 clusters.
+- **Also reported:** consistent misses (failure images ranked low by instability), with examples.
+- **Status:** frozen and committed before the evaluation code is written or any review-pool label is read; run once.

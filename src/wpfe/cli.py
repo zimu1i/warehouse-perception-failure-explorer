@@ -21,6 +21,10 @@ def main(argv: list[str] | None = None) -> None:
     train = sub.add_parser("train", help="fine-tune Faster R-CNN on the dev training subsets (resumable)")
     train.add_argument("--device", default="auto")
     train.add_argument("--smoke", type=int, metavar="N", help="stop after N iterations (pipeline check only)")
+    infer = sub.add_parser("infer", help="score tune + review images (original and flipped) with the trained model")
+    infer.add_argument("--run", help="model run id (default: frozen_model in the config)")
+    infer.add_argument("--device", default="auto")
+    infer.add_argument("--smoke", type=int, metavar="N", help="only the first N images (pipeline check only)")
     args = parser.parse_args(argv)
 
     cfg = load_config(args.config)
@@ -47,6 +51,11 @@ def main(argv: list[str] | None = None) -> None:
 
         summary = run_train(cfg, args.device, max_iters=args.smoke)
         print(json.dumps({k: summary[k] for k in ["run_id", "n_train_images", "device"]}, indent=2))
+    elif args.command == "infer":
+        from wpfe.infer import run_infer
+
+        summary = run_infer(cfg, args.run or cfg.raw["frozen_model"], args.device, limit=args.smoke)
+        print(json.dumps(summary, indent=2))
 
 
 if __name__ == "__main__":
