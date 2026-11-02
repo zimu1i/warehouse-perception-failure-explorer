@@ -21,6 +21,18 @@ The full write-up, including per-site results and limitations, is in **[docs/rep
 
 To be clear about scope: this is about prioritizing images for human review. The detector is frozen before any images are selected and is never retrained on them, so this is not active learning.
 
+## The viewer
+
+I also built a small Streamlit app to look at the results image by image.
+
+The **review queue** shows what a reviewer would actually see: images ranked by a selection method, with the detector's boxes from the original image in blue and from the mirrored image in orange. Boxes that only appear in one of the two views are drawn thicker, so you can see where the model disagrees with itself. This mode never loads the labels.
+
+![Review queue in the viewer](docs/figures/viewer_queue.jpg)
+
+The **results** mode opens the labels and lets you step through caught failures, false alarms and consistent misses. In the example below, the detector found only 1 of the 3 labelled objects, but it made the same mistakes in both views, so its instability is just 0.04 and the ranking puts it near the bottom of the queue.
+
+![Results mode showing a consistent miss](docs/figures/viewer_results.jpg)
+
 ## How it works
 
 ```
@@ -72,7 +84,7 @@ To browse the results, start the viewer:
 uv run --group viewer streamlit run src/wpfe/viewer.py
 ```
 
-It has two modes. **Review queue** shows what a reviewer would see: images ranked by a selection method, with the boxes from the original and mirrored images drawn on top and the disagreeing boxes highlighted. It never loads the labels. **Results** opens the labels and lets you step through caught failures, false alarms and consistent misses.
+You can link straight to a view, for example `http://localhost:8501/?rank=20` or `http://localhost:8501/?mode=results&show=2`.
 
 `uv run wpfe benchmark --model owlv2_base --prompts descriptive` reruns the zero-shot detector comparison I did before deciding to train my own model ([docs/detector_benchmark.md](docs/detector_benchmark.md)).
 

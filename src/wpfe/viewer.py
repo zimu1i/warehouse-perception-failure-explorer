@@ -56,6 +56,14 @@ def per_image() -> pd.DataFrame:
     return pd.read_parquet(EXP / "per_image.parquet").query("analysis == 'primary'")
 
 
+def _param(name: str, default: int, low: int, high: int) -> int:
+    """Initial widget value from the URL, e.g. ?mode=results&show=2&image=3 or ?rank=20."""
+    try:
+        return min(max(int(st.query_params.get(name, default)), low), high)
+    except ValueError:
+        return default
+
+
 def _tuples(df: pd.DataFrame) -> list[tuple]:
     return list(df[BOX].itertuples(index=False, name=None))
 
@@ -121,7 +129,7 @@ def review_queue() -> None:
     with left:
         st.dataframe(queue[["rank", "image_id", "subset", "instability", "score_mass"]].round(3),
                      hide_index=True, height=560)
-        rank = st.number_input("Open image at rank", 1, len(queue), 1)
+        rank = st.number_input("Open image at rank", 1, len(queue), _param("rank", 1, 1, len(queue)))
     row = queue.iloc[rank - 1]
     orig, flip = split_views(row.image_id, threshold)
     with right:
@@ -159,12 +167,12 @@ def results() -> None:
     }
     left, right = st.columns([2, 5])
     with left:
-        choice = st.radio("Show", list(views))
+        choice = st.radio("Show", list(views), index=_param("show", 0, 0, len(views) - 1))
         subset = views[choice].sort_values("instability", ascending=choice.startswith("Consistent")).reset_index(drop=True)
         st.caption(f"{len(subset)} images")
         if subset.empty:
             return
-        i = st.number_input("Image", 1, len(subset), 1) - 1
+        i = st.number_input("Image", 1, len(subset), _param("image", 1, 1, len(subset))) - 1
         row = subset.iloc[i]
         st.metric("Objects found", f"{row.found:.0f} of {row.n_gt:.0f}")
         st.metric("Image recall", f"{row.recall:.2f}")
@@ -178,7 +186,7 @@ def results() -> None:
 
 st.set_page_config(page_title="Warehouse Perception Failure Explorer", layout="wide")
 st.sidebar.title("Failure Explorer")
-mode = st.sidebar.radio("Mode", ["Review queue", "Results"])
+mode = st.sidebar.radio("Mode", ["Review queue", "Results"], index=int(st.query_params.get("mode") == "results"))
 st.sidebar.divider()
 if mode == "Review queue":
     review_queue()
