@@ -25,6 +25,7 @@ def main(argv: list[str] | None = None) -> None:
     infer.add_argument("--run", help="model run id (default: frozen_model in the config)")
     infer.add_argument("--device", default="auto")
     infer.add_argument("--smoke", type=int, metavar="N", help="only the first N images (pipeline check only)")
+    sub.add_parser("experiment", help="run the frozen selection experiment once (reads review labels)")
     args = parser.parse_args(argv)
 
     cfg = load_config(args.config)
@@ -56,6 +57,13 @@ def main(argv: list[str] | None = None) -> None:
 
         summary = run_infer(cfg, args.run or cfg.raw["frozen_model"], args.device, limit=args.smoke)
         print(json.dumps(summary, indent=2))
+    elif args.command == "experiment":
+        from wpfe.experiment import run_experiment
+
+        result = run_experiment(cfg)
+        print(json.dumps(result["summary"], indent=2))
+        print(result["results"].round(3).to_string(index=False))
+        print("\npost-hoc density check:\n" + result["exploratory"].round(3).to_string(index=False))
 
 
 if __name__ == "__main__":
