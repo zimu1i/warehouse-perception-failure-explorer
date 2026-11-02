@@ -21,6 +21,9 @@ dev = [
     "matplotlib>=3.11.2",
     "pytest>=8",
 ]
+viewer = [
+    "streamlit>=1.66.1",
+]
 
 [project.scripts]
 wpfe = "wpfe.cli:main"

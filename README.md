@@ -66,6 +66,14 @@ uv run wpfe figures
 uv run pytest             # 79 tests on small synthetic examples, no dataset needed
 ```
 
+To browse the results, start the viewer:
+
+```bash
+uv run --group viewer streamlit run src/wpfe/viewer.py
+```
+
+It has two modes. **Review queue** shows what a reviewer would see: images ranked by a selection method, with the boxes from the original and mirrored images drawn on top and the disagreeing boxes highlighted. It never loads the labels. **Results** opens the labels and lets you step through caught failures, false alarms and consistent misses.
+
 `uv run wpfe benchmark --model owlv2_base --prompts descriptive` reruns the zero-shot detector comparison I did before deciding to train my own model ([docs/detector_benchmark.md](docs/detector_benchmark.md)).
 
 All settings, including the frozen failure rule, are in [configs/default.yaml](configs/default.yaml).
@@ -80,6 +88,7 @@ All settings, including the frozen failure rule, are in [configs/default.yaml](c
 | `src/wpfe/boxes.py`, `matching.py` | box mirroring, IoU, and matching predictions to labels |
 | `src/wpfe/instability.py`, `select.py` | the instability score and the image selection methods |
 | `src/wpfe/experiment.py`, `figures.py` | the experiment and the figures |
+| `src/wpfe/viewer.py` | Streamlit viewer for the review queue and the results |
 | `docs/` | report, decision log, dataset card, detector benchmark |
 
 ## Limitations
