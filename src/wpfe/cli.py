@@ -26,6 +26,7 @@ def main(argv: list[str] | None = None) -> None:
     infer.add_argument("--device", default="auto")
     infer.add_argument("--smoke", type=int, metavar="N", help="only the first N images (pipeline check only)")
     sub.add_parser("experiment", help="run the frozen selection experiment once (reads review labels)")
+    sub.add_parser("figures", help="draw README/report figures from the experiment artifacts")
     args = parser.parse_args(argv)
 
     cfg = load_config(args.config)
@@ -64,6 +65,11 @@ def main(argv: list[str] | None = None) -> None:
         print(json.dumps(result["summary"], indent=2))
         print(result["results"].round(3).to_string(index=False))
         print("\npost-hoc density check:\n" + result["exploratory"].round(3).to_string(index=False))
+
+    elif args.command == "figures":
+        from wpfe.figures import run_figures
+
+        print("\n".join(run_figures(cfg)))
 
 
 if __name__ == "__main__":
