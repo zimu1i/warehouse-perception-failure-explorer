@@ -1,103 +1,111 @@
-# Report: label-blind review prioritization for warehouse object detection
+# Report: choosing warehouse images for human review without looking at labels
 
-**Question.** Given a fixed human review budget, can a label-blind ranking pick warehouse images that contain more object-detection failures than random sampling does?
+## The question
 
-**Short answer.** Yes, but less than the headline suggests. Ranking by flip instability found about 4x more severe-failure images than random sampling, at both unseen warehouses and at every budget tested. A post-hoc check showed that much of this gain comes from preferring sparse images: a simple "fewest detections" rule recovers most of it. Against random batches with the same mix of detection counts, instability still finds about 1.6x more failures. About a fifth of failures are consistent misses that instability cannot see.
+If a reviewer only has time to check a small batch of images, can a ranking that never looks at labels choose images with more object detection failures than random sampling would?
 
-This is review prioritization: the detector is frozen before selection and is never retrained on reviewed images, so this is not an active-learning result.
+## Short answer
+
+Yes, though by less than the first number suggests. Ranking images by flip instability found about four times as many failures as random sampling, at both unseen warehouses and for every batch size I tried. When I checked why, I found that a large part of this comes from the ranking preferring sparse scenes, and a simple "fewest detections" rule gets most of the same benefit. With scene density held constant, instability still finds about 1.6 times as many failures as random. Roughly a fifth of all failures are cases where the detector is consistently wrong, which this method cannot detect.
+
+The detector is frozen before any images are selected and is never retrained on them. This is review prioritization, not active learning.
 
 ## 1. Data and split
 
-- **Dataset:** LOCO (Logistics Objects in Context, TUM, CC0-1.0). Images were captured while walking through warehouses with handheld cameras; they are not robot-mounted camera data. Five classes: pallet, small load carrier, stillage, pallet truck, forklift. See `docs/dataset_card.md`.
-- **Environment-level split (D3, D6):** each LOCO subset is a different site.
+I used LOCO (Logistics Objects in Context, TUM, CC0-1.0). The images were taken by people walking through warehouses with handheld cameras, so they are not robot-mounted camera data. There are five classes: pallet, small load carrier, stillage, pallet truck and forklift. Details are in `docs/dataset_card.md`.
 
-| Role | Subsets | Annotated images | Used for |
+LOCO is organized into five subsets, each from a different site. I split by site so that near-identical frames from the same walk could never end up in both training and evaluation (decisions D3 and D6):
+
+| Role | Subsets | Labelled images | Used for |
 |---|---|---|---|
-| Train | 2, 5 | 1,947 | fine-tuning the detector |
-| Tune | 3 | 873 | choosing the score threshold and tau |
+| Training | 2, 5 | 1,947 | fine-tuning the detector |
+| Tuning | 3 | 873 | choosing the score threshold and the failure cutoff |
 | Review pool | 1, 4 | 2,277 | the selection experiment only |
 
-The review pool's labels were first read by the evaluation code, after the failure rule and the experiment design were committed (commits `4f888ed` and earlier; evaluation code in `c7e18f1`).
+No code read the review pool's labels until the evaluation step. The failure rule and the experiment design were committed first (commit `4f888ed`), and the evaluation code came after (commit `c7e18f1`).
 
 ## 2. Detector
 
-Zero-shot open-vocabulary detectors (Grounding DINO tiny, OWLv2 base) were benchmarked first (`docs/detector_benchmark.md`). Both box whole pallet stacks as one object, while LOCO labels each pallet, so about 90% of images would have counted as failures, leaving no headroom for ranking (D5).
+I first tried two zero-shot detectors that take text prompts, Grounding DINO tiny and OWLv2 base (`docs/detector_benchmark.md`). Both tended to draw one box around a whole stack of pallets, while LOCO labels every pallet separately. With either model, about 90% of images would have counted as failures, which leaves nothing for a ranking method to improve on (D5).
 
-Instead, a COCO-pretrained torchvision Faster R-CNN (ResNet-50 FPN v2) was fine-tuned for 6 epochs on subsets 2 and 5 (shorter side 640 px, horizontal flip augmentation p = 0.5, fixed schedule, last epoch used) on an Apple M3 (MPS), about 3.5 hours in total. On the tune subset at the frozen operating point (score >= 0.4, IoU 0.5): precision 0.47, recall 0.42. Pallet trucks transferred poorly to the tune site (recall 0.15 on the per-epoch monitor sample) despite 1,366 training boxes, mostly from one site.
+So I fine-tuned a COCO-pretrained Faster R-CNN (torchvision, ResNet-50 FPN v2) on subsets 2 and 5. I trained for 6 epochs with images resized to 640 px on the short side and random horizontal flips, using a fixed schedule and the last epoch, on an M3 MacBook. Training took about 3.5 hours. On the tuning site, at the operating point I chose (score of at least 0.4, IoU 0.5), precision was 0.47 and recall 0.42.
 
-## 3. Failure event (frozen on the tune subset only)
+One thing that stood out: the model barely recognized pallet trucks at the tuning site (recall 0.15 on the monitoring sample), even though it had 1,366 pallet truck boxes in training. Most of those came from a single site, so the model seems to have learned what that site's pallet trucks look like rather than pallet trucks in general.
 
-- Matching: class-aware, greedy one-to-one by descending score, IoU >= 0.5 (same rule as pycocotools) (D8).
-- An image is a **severe failure** if fewer than 40% of its ground-truth boxes are matched by predictions with score >= 0.4 (D1, D10).
-- The score threshold maximizes F1 on the tune subset; tau gave a 43% failure rate there.
+## 3. What counts as a failure
 
-## 4. Selectors (label-blind)
+- A predicted box matches a labelled box if they have the same class and an IoU of at least 0.5. Each prediction can match at most one label, and the most confident predictions pick first. This is the same rule pycocotools uses (D8).
+- An image is a **severe failure** if fewer than 40% of its labelled objects are matched by predictions with a score of at least 0.4 (D1, D10).
+- I chose the score threshold as the one with the best F1 score on the tuning site. I chose the 40% cutoff so that a reasonable share of tuning images (43%) counted as failures.
 
-All selectors read only the candidate table (image id, camera sequence, frame position, instability score); annotations are not an input.
+## 4. How images are selected
 
-- **Random:** 1,000 seeds per budget.
-- **Flip instability (D9):** each image is scored twice, as-is and mirrored; mirrored boxes are mapped back and matched to the original boxes with the D8 rule. Instability = confidence mass of boxes without a partner in the other view / total confidence mass. Top-k by this score.
-- **Instability + diversity (D11):** the same ranking, skipping any image within 2 frames of an earlier pick in the same camera sequence. A label-blind check showed 42 of the plain top 100 were within 2 frames of another pick.
+None of these methods sees labels. They only receive a table with each image's id, camera sequence, frame position and instability score.
 
-## 5. Results (run once, as designed)
+- **Random:** 1,000 random batches per batch size, to show what luck alone produces.
+- **Flip instability (D9):** I run the detector on each image and on its mirror image, map the mirrored boxes back, and pair up boxes between the two views using the matching rule above. The score is the share of total confidence that sits on boxes with no partner in the other view. 0 means the two views agree completely; 1 means nothing matches. I take the top-scoring images.
+- **Instability with spacing (D11):** the same ranking, but an image is skipped if it is within 2 frames of an image already picked from the same camera. Before running the experiment I checked, without labels, that 42 of the top 100 images were within 2 frames of another pick.
 
-Review pool: 2,277 images, 355 severe failures (base rate 15.6%, lower than the tune site's 43%; the review sites were easier).
+## 5. Results
 
-![Failures found by budget](figures/failures_by_budget.png)
+I ran the experiment once, as designed. The review pool has 2,277 images, and 355 of them are severe failures (15.6%). That is lower than the 43% at the tuning site, so the review warehouses turned out to be easier for the model.
 
-**Severe failures found per batch (whole pool):**
+![Failures found by batch size](figures/failures_by_budget.png)
 
-| Budget | Random mean (95% range) | Instability | Lift | Instability + diversity |
+Failures found per batch, whole review pool:
+
+| Batch size | Random, average (95% range) | Instability | Ratio | Instability with spacing |
 |---|---|---|---|---|
-| 25 | 3.8 (1-8) | 17 | 4.4x | 16 |
-| 50 | 7.8 (3-13) | 32 | 4.1x | 32 |
-| 100 | 15.4 (9-23) | 52 | 3.4x | 54 |
+| 25 | 3.8 (1 to 8) | 17 | 4.4x | 16 |
+| 50 | 7.8 (3 to 13) | 32 | 4.1x | 32 |
+| 100 | 15.4 (9 to 23) | 52 | 3.4x | 54 |
 
-No random batch out of 1,000 matched instability at any budget (p < 0.001).
+None of the 1,000 random batches did as well as instability at any batch size.
 
-**Per site, budget 50:** subset 1: 29 vs 8.8 random; subset 4: 30 vs 6.9 random. The effect holds at both unseen sites. The pool contains only 8 camera sequences and neighboring frames are correlated, so consistency across sites is the main robustness evidence; no sequence-level confidence interval is claimed.
+Looking at each warehouse separately with batches of 50, instability found 29 failures versus 8.8 at subset 1, and 30 versus 6.9 at subset 4. The pool only has 8 camera sequences and nearby frames are similar, so I treat agreement between the two sites as the main evidence rather than the p-values.
 
-**Sensitivity (IoU 0.3):** base rate drops to 8.4%; instability finds 30 vs 4.3 at budget 50. The conclusion does not depend on the IoU threshold.
+As a sensitivity check I loosened the matching rule to IoU 0.3. The failure rate drops to 8.4%, and instability finds 30 failures in 50 versus 4.3 for random, so the conclusion doesn't depend on that setting.
 
-**Diversity:** no consistent effect. It helped at subset 4 for small budgets (19 vs 16 at 25) and hurt at subset 1 (23 vs 29 at 50).
+Spacing out the picks didn't help consistently. It helped slightly at subset 4 for small batches (19 versus 16 with batches of 25) and hurt at subset 1 (23 versus 29 with batches of 50).
 
-## 6. Confound check (post-hoc, not part of the frozen design)
+## 6. Checking for a confound
 
-The top-50 instability picks have a median of 2.5 ground-truth objects, against 21 for the pool. Sparse images fail more often under a recall rule (26% of images with at most 5 objects vs 15.6% overall), and a score-weighted instability is also more volatile when an image has few boxes. Both are label-free effects of image density, so two label-free comparisons were added:
+This part was not in the original plan. I added it after seeing the results, so I treat it as exploratory.
 
-| Budget | Instability | Fewest detections at the operating point | Random, same detection-count mix (mean) |
+The 50 most unstable images had a median of 2.5 labelled objects, compared with 21 across the whole pool. That matters for two reasons. With a recall-based rule, sparse images fail more easily: 26% of images with five or fewer objects are failures, against 15.6% overall. The instability score is also jumpier when an image has only a few boxes. So both the score and the failure label rise on sparse images, partly for reasons that have nothing to do with the model being unsure.
+
+To measure this, I compared instability with two other ways of choosing images that also don't use labels:
+
+| Batch size | Instability | Fewest detections | Random, same mix of sparse and busy scenes (average) |
 |---|---|---|---|
 | 25 | 17 | **20** | 10.9 |
 | 50 | **32** | 28 | 19.2 |
 | 100 | **52** | 45 | 33.6 |
 
-- Against density-matched random batches, instability still wins (p = 0.007 at 25, p < 0.001 at 50 and 100): the score carries signal beyond sparsity.
-- A trivial "fewest detections" rule recovers most of the gain and beats instability at budget 25.
+Two things follow from this. First, instability still beats random batches with the same density mix (p = 0.007 at 25, p < 0.001 at 50 and 100), so the score does pick up something beyond sparsity. Second, simply choosing the images with the fewest detections captures most of the benefit, and does better than instability for batches of 25.
 
-These comparisons were chosen after seeing the main result, so they are reported as exploratory.
+## 7. What instability misses
 
-## 7. Blind spot: consistent misses
-
-67 of the 355 failures (19%) have below-median instability, and 10 failures have no detections at all at the operating point. When the detector misses an object the same way in both views, mirroring produces no disagreement.
+67 of the 355 failures (19%) had below-median instability, and 10 failures had no detections at all at the operating point. If the detector misses an object in the original image and also in the mirrored one, the two views agree, and the score sees nothing wrong.
 
 ![Examples](figures/examples.jpg)
 
-*Left: a picked image that is a real failure (0 of 10 objects found). Middle: a picked image that is not a failure. Right: a consistent miss that instability ranks low. White: ground truth; blue: original-view predictions; orange: flipped-view predictions (score >= 0.4).*
+*Left: an image the ranking picked that really was a failure (0 of 10 objects found). Middle: an image it picked that was fine. Right: a failure the ranking scored as stable. White boxes are labels, blue boxes are predictions on the original image, and orange boxes are predictions on the mirrored image (score of at least 0.4).*
 
 ## 8. Limitations
 
-- **Base rate outside the target band.** The review pool's failure rate (15.6%) fell below the 20-50% band targeted on the tune site, because the review sites were easier.
-- **Density confound.** The recall-based failure event is coarse on sparse images. Much of the measured gain is attributable to sparsity (section 6).
-- **Few independent units.** Two review sites and 8 camera sequences; frame-level p-values overstate certainty.
-- **One detector, one perturbation.** Results are for one fine-tuned Faster R-CNN trained with flip augmentation, and only horizontal flips were tested.
-- **Greedy matching** is not globally optimal; it is kept for consistency with the standard evaluator.
+- The review pool's failure rate (15.6%) ended up below the 20 to 50% range I aimed for on the tuning site, because the review warehouses were easier.
+- The recall-based failure rule is coarse for images with few objects, and that explains much of the measured gain (section 6).
+- Two review sites and 8 camera sequences are not many independent samples, so image-level p-values overstate how certain these results are.
+- I only tested one detector, trained with flip augmentation, and only one kind of image change.
+- The matching rule is greedy rather than optimal. I kept it so my numbers line up with the standard evaluator.
 
-## 9. What I would do next
+## 9. What I would try next
 
-- Combine signals: instability within detection-count strata, or a second detector's disagreement, which can expose consistent misses.
-- Keep a small random slice of every review batch so blind spots are still sampled.
-- Replace image recall with a density-robust failure event (for example, misses per image weighted by object size) and rerun on a new frozen split.
+- Combine signals, for example ranking by instability within groups of similar scene density, or adding disagreement between two different detectors, which could catch some of the consistent misses.
+- Keep a small random sample in every review batch, so the reviewer still sees the kinds of failures the ranking can't detect.
+- Define failures in a way that is less sensitive to object count, and rerun the experiment on a newly frozen split.
 
-## Reproducing
+## Reproducing the results
 
-See the README. Every number above is produced by `uv run wpfe experiment` from cached predictions; figures by `uv run wpfe figures`.
+The README explains the setup. Every number in this report comes from `uv run wpfe experiment` using the saved predictions, and the figures come from `uv run wpfe figures`.

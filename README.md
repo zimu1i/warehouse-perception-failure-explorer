@@ -1,85 +1,90 @@
 # Warehouse Perception Failure Explorer
 
-Given a fixed human review budget, can a **label-blind ranking** pick warehouse images that contain more object-detection failures than random sampling does?
+Robots and camera rigs collect far more images than anyone has time to label. If a reviewer can only check 50 images, which 50 should they look at?
 
-This project fine-tunes an object detector on some warehouses, runs it on two warehouses it has never seen, and tests whether ranking images by **flip instability** (does the detector's answer change when the image is mirrored?) surfaces more failures for human review than random picking.
+In this project I tested one answer to that question. I fine-tuned an object detector on three warehouses, ran it on two warehouses it had never seen, and ranked those images by **flip instability**: I run the detector on each image twice, once normally and once mirrored, and measure how much its two answers disagree. The idea is that if mirroring an image changes what the model sees, the model is probably unsure about that image, and unsure images are where mistakes hide.
+
+The ranking never looks at the labels. I only used the labels afterwards, to count how many real failures each method found.
 
 ![Failures found by budget](docs/figures/failures_by_budget.png)
 
-## Result
+## What I found
 
-- Out of 2,277 images from two unseen warehouses (15.6% severe failures), the 50 most unstable images contained **32 failures**, against **7.8** for random batches of 50 (95% range 3-13). That's about 4x, at both sites and at budgets of 25, 50 and 100.
-- **Caveat found by a post-hoc check:** the ranking prefers sparse images, which fail more often under a recall-based rule. A simple "fewest detections" rule recovers most of the gain (28 of 50). Against random batches with the same mix of detection counts, instability still finds about 1.6x more failures.
-- **Blind spot:** about 19% of failures are consistent misses, where the detector is wrong the same way in both views, so instability cannot see them.
+The pool had 2,277 images from the two unseen warehouses, and 355 of them (15.6%) were severe failures, meaning the detector found fewer than 40% of the objects in the image.
 
-Full write-up with methods, per-site results, sensitivity checks and limitations: **[docs/report.md](docs/report.md)**.
+- The 50 most unstable images contained 32 failures. Random batches of 50 contained about 8 on average, and never more than 13 in 1,000 tries. The result held at both warehouses and for batches of 25, 50 and 100.
+- When I looked at which images the ranking picked, most were nearly empty scenes with only two or three objects. Those images fail more often anyway, because missing two out of three objects already counts as a failure. A much simpler rule, "pick the images with the fewest detections", got 28 failures out of 50. So a good part of the 4x gain comes from scene density rather than from the instability score itself.
+- When I compared against random batches with the same mix of sparse and busy scenes, instability still found about 1.6x more failures. The signal is real, just smaller than the headline number.
+- About one in five failures are images where the detector is wrong in the same way in both views. Flip instability can't catch those, and I show an example in the report.
 
-This is **review prioritization**, not active learning: the detector is frozen before any selection and is never retrained on reviewed images.
+The full write-up, including per-site results and limitations, is in **[docs/report.md](docs/report.md)**.
 
-## Pipeline
+To be clear about scope: this is about prioritizing images for human review. The detector is frozen before any images are selected and is never retrained on them, so this is not active learning.
+
+## How it works
 
 ```
-LOCO release ──► ingest ──► validate ──► train ──► infer (original + flipped) ──► instability score
- (immutable)    manifests   quality      Faster     cached predictions,           per image
-                (Parquet)   findings     R-CNN      label-blind
-                                                                    │
-            frozen on the tune site: score threshold, tau ◄─────────┤
-                                                                    ▼
-                                        selectors (random / instability / + diversity)
-                                                                    │
-                                        review labels read only here ▼
-                                        experiment: failures found per batch ──► report, figures
+LOCO images ──► ingest ──► validate ──► train ──► run on original + mirrored images ──► instability score
+                tables     quality      Faster    predictions saved, labels never read
+                           checks       R-CNN
+                                                               │
+               score threshold and failure rule set on a ◄────┤
+               separate tuning warehouse, then frozen          ▼
+                                     pick images: random / instability / instability + spacing
+                                                               │
+                                    labels opened only here ───▼
+                                    count failures in each batch ──► report and figures
 ```
 
-**Leakage controls**
-- The split is by environment: train on sites 2+5, tune on site 3, review pool = sites 1+4.
-- The failure rule and the experiment design were committed before any review-pool label was read.
-- Selectors take a label-free table as their only input.
-- The experiment was run once.
+I was careful about leakage because it would be easy to fool myself here:
 
-All decisions, with the options considered and their costs, are in [docs/decision_log.md](docs/decision_log.md) (D1-D11).
+- Train, tune and review data come from different warehouses, so near-identical frames can't end up on both sides.
+- I chose the failure rule and the score threshold on the tuning warehouse, and committed them along with the experiment design before reading a single review label.
+- The selection functions only receive a table without labels, so they can't use them even by accident.
+- I ran the experiment once.
+
+Every design decision, with the alternatives I considered and what each one costs, is written up in [docs/decision_log.md](docs/decision_log.md).
 
 ## Data
 
-[LOCO: Logistics Objects in Context](https://github.com/tum-fml/loco) (Mayershofer et al., ICMLA 2020; CC0-1.0). It has 5,097 annotated images and 151,428 boxes across five classes: pallet, small load carrier, stillage, pallet truck and forklift. The images were captured while walking through warehouses with handheld cameras. Details and verified counts are in [docs/dataset_card.md](docs/dataset_card.md). The data is not included in this repository.
+I used [LOCO (Logistics Objects in Context)](https://github.com/tum-fml/loco) from TUM (Mayershofer et al., ICMLA 2020, CC0-1.0). It has 5,097 labelled images with 151,428 boxes across five classes: pallet, small load carrier, stillage, pallet truck and forklift. The images were taken by people walking through warehouses with handheld cameras. More detail is in [docs/dataset_card.md](docs/dataset_card.md). The images themselves are not included in this repository.
 
 ## Running it
 
-Requires Python 3.11-3.12 and [uv](https://docs.astral.sh/uv/). It was developed on an Apple M3 (MPS); CUDA and CPU also work.
+You need Python 3.11 or 3.12 and [uv](https://docs.astral.sh/uv/). I built and ran everything on an M3 MacBook (MPS backend); CUDA and CPU should also work.
 
-1. Download `dataset.zip` (linked from the LOCO repository) and extract it to `data/raw/loco_v1/`, together with the annotation JSONs from the repo's `rgb/` folder.
-2. Then run, in order:
+First download `dataset.zip` (linked from the LOCO repository) and extract it to `data/raw/loco_v1/`, along with the annotation JSON files from the repository's `rgb/` folder. Then:
 
 ```bash
 uv sync
-uv run wpfe ingest        # image + annotation manifests (Parquet)
-uv run wpfe validate      # data-quality findings
-uv run wpfe train         # ~3.5 h on an M3; resumable
-uv run wpfe infer         # ~40 min; original + flipped views, resumable
-uv run wpfe experiment    # seconds; reads cached predictions
+uv run wpfe ingest        # build image and annotation tables (Parquet)
+uv run wpfe validate      # data quality checks
+uv run wpfe train         # about 3.5 hours on an M3, can resume if interrupted
+uv run wpfe infer         # about 40 minutes, original and mirrored images
+uv run wpfe experiment    # a few seconds, uses the saved predictions
 uv run wpfe figures
-uv run pytest             # 79 tests, synthetic fixtures, no data needed
+uv run pytest             # 79 tests on small synthetic examples, no dataset needed
 ```
 
-Optional: `uv run wpfe benchmark --model owlv2_base --prompts descriptive` reproduces the zero-shot detector benchmark ([docs/detector_benchmark.md](docs/detector_benchmark.md)).
+`uv run wpfe benchmark --model owlv2_base --prompts descriptive` reruns the zero-shot detector comparison I did before deciding to train my own model ([docs/detector_benchmark.md](docs/detector_benchmark.md)).
 
-Configuration, including the frozen operating point and experiment design, is in [configs/default.yaml](configs/default.yaml).
+All settings, including the frozen failure rule, are in [configs/default.yaml](configs/default.yaml).
 
-## Repository layout
+## Code layout
 
-| Path | Contents |
+| Path | What it does |
 |---|---|
-| `src/wpfe/ingest.py`, `validate.py` | manifests and data-quality checks |
+| `src/wpfe/ingest.py`, `validate.py` | build the data tables and run quality checks |
 | `src/wpfe/detect.py`, `benchmark.py`, `coco_eval.py` | zero-shot detector benchmark |
-| `src/wpfe/train.py`, `infer.py` | fine-tuning and cached two-view inference |
-| `src/wpfe/boxes.py`, `matching.py` | box flipping, IoU, one-to-one matching |
-| `src/wpfe/instability.py`, `select.py` | instability score and label-blind selectors |
-| `src/wpfe/experiment.py`, `figures.py` | the experiment and report figures |
+| `src/wpfe/train.py`, `infer.py` | fine-tuning, and saved predictions on original and mirrored images |
+| `src/wpfe/boxes.py`, `matching.py` | box mirroring, IoU, and matching predictions to labels |
+| `src/wpfe/instability.py`, `select.py` | the instability score and the image selection methods |
+| `src/wpfe/experiment.py`, `figures.py` | the experiment and the figures |
 | `docs/` | report, decision log, dataset card, detector benchmark |
 
 ## Limitations
 
-- Two review sites and eight camera sequences, so frame-level p-values overstate certainty.
-- The recall-based failure event is coarse on sparse images (see the confound check in the report).
-- One detector, one perturbation (horizontal flip).
-- This is an offline analysis tool. It makes no claim about deployed systems or safety.
+- There are only two review warehouses and eight camera sequences, and nearby frames look alike, so the image-level p-values look more certain than they really are.
+- My failure rule is based on recall per image, which is coarse for images with very few objects. That is where the density effect above comes from.
+- I tested one detector and one kind of change to the image (a horizontal flip).
+- This is an offline analysis project. It doesn't make any claims about real deployed systems or safety.
